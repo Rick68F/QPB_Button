@@ -3,7 +3,7 @@
 This library is used for manage Push Button in a simple way, entry are put in a queue.
 Only click and long click(time pushed is given).
 
-I have designed this library I don't have fund a library that correspond to my use.
+I have designed this library why I don't have fund a library that correspond to my use.
 
 Working usage
 
