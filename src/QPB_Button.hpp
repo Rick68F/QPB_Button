@@ -18,6 +18,15 @@ namespace QPB {  // Queue Push Button
 
 #if defined(ARDUINO_ARCH_ESP32)
 hw_timer_t *QPBtimer = NULL;
+
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 1, 0)
+// This variable is used for syncronisation
+// We use it to ensure that the ISR and the loop
+// do not try to access the interruptCounter variable
+// at the same time.
+portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
+#endif
+
 #elif defined(ARDUINO_ARCH_RP2040)
 // nothing to do
 #elif defined(ARDUINO_ARCH_STM32)
@@ -56,10 +65,14 @@ uint8_t QPBavailable() {
   return (QPBQueue.size());
 }
 
-QPB_Key QPBread() {
+QPB_Key QPBread() { // read one key user has to check if a key is available 
   QPB_Key QPB_values = QPBQueue.front();
   QPBQueue.pop();
   return ((QPB_Key)QPB_values);
+}
+
+void QPBclear() { // Clear the queue 
+ while (! QPBQueue.empty()) QPBQueue.pop(); 
 }
 
 #if defined(ARDUINO_ARCH_ESP32)
@@ -69,8 +82,11 @@ bool QPBonTimer(repeating_timer_t *) {
 #elif defined(ARDUINO_ARCH_STM32)
 void QPBonTimer() {
 #endif
-
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 1, 0)
+  portENTER_CRITICAL_ISR(&timerMux);
+#endif
   QPB_Key k;
+
   for (uint8_t i; i < nbrQPB; i++) {
     if (digitalRead(QPB::PtrQPB[i].pin) == QPB::PtrQPB[i].logic) QPB::PtrQPB[i].tics++;
     else {
@@ -82,6 +98,9 @@ void QPBonTimer() {
       QPB::PtrQPB[i].tics = 0;
     }
   }
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 1, 0)
+  portEXIT_CRITICAL_ISR(&timerMux);
+#endif
 #if defined(ARDUINO_ARCH_RP2040)
   return (true);
 #endif
@@ -94,18 +113,33 @@ void QPB_init(QPB_Buttons *keys, uint8_t cpt, TIM_TypeDef *timerid = TIM1) {  //
 #endif
 
 #if defined(ARDUINO_ARCH_ESP32)
+
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 1, 0)
+  Serial.println("ESP-IDF >=5.1 or arduino library esp32 >=3.0.0");
+  // Set timer frequency to 1Mhz
+  if ((QPBtimer = timerBegin(1'000'000)) == NULL)  // API 3.0 setup timer for 1uSec
+    Serial.println("timerBegin Failed!!");
+  // Attach onTimer function to our timer.
+  timerAttachInterrupt(QPBtimer, &QPB::QPBonTimer);
+
+  // Set alarm to call onTimer function every second (value in microseconds).
+  // Repeat the alarm (third parameter) with unlimited count = 0 (fourth parameter).
+  timerAlarm(QPBtimer, 10000, true, 0);
+
+#else
   QPBtimer = timerBegin(timerid, 80, true);
   timerAttachInterrupt(QPBtimer, &QPB::QPBonTimer, true);
-  timerAlarmWrite(QPBtimer, 10000, true);  // every 0.1 seconds
+  timerAlarmWrite(QPBtimer, 10000, true);  // every 0.01 seconds
   timerAlarmEnable(QPBtimer);
+#endif
 #elif defined(ARDUINO_ARCH_RP2040)  // tim is not needed and ignored
   static repeating_timer_t Timer1ms;
   add_repeating_timer_ms(10, QPB::QPBonTimer, NULL, &Timer1ms);
 #elif defined(ARDUINO_ARCH_STM32)
-  HardwareTimer *stimer_t = new HardwareTimer(timerid);  // see https://github.com/stm32duino/wiki/wiki/HardwareTimer-library
-  stimer_t->setOverflow(10000, MICROSEC_FORMAT);         //
-  stimer_t->attachInterrupt(QPBonTimer);
-  stimer_t->resume();
+HardwareTimer *stimer_t = new HardwareTimer(timerid);  // see https://github.com/stm32duino/wiki/wiki/HardwareTimer-library
+stimer_t->setOverflow(10000, MICROSEC_FORMAT);         //
+stimer_t->attachInterrupt(QPBonTimer);
+stimer_t->resume();
 #endif
 
   PtrQPB = keys;
